@@ -4,66 +4,92 @@
   <h1 class="mb-4">Tailscale Access</h1>
 
   {% if not allow_display %}
-    <div class="alert alert-info" role="alert">
-      Organizers have not released the pre-auth keys yet. Please check back closer to the competition start.
-    </div>
+  <div class="alert alert-info" role="alert">
+    Organizers have not released the pre-auth keys yet. Please check back closer to the competition start.
+  </div>
   {% else %}
-    {% if key_record %}
-      <div class="card mb-4">
-        <div class="card-body">
-          <h2 class="h5">Connect with Tailscale</h2>
-          <p>Install the Tailscale CLI from <a href="https://tailscale.com/download" target="_blank" rel="noopener">tailscale.com/download</a> or your operating system's package manager, then click below to reveal your personalized commands.</p>
-          <button type="button" class="btn btn-primary" id="reveal-tailscale-command">Show commands</button>
-          <div class="mt-3 d-none" id="tailscale-command-block">
-            <div class="border rounded p-3 mb-3">
-              <h3 class="h6">macOS</h3>
-              <ol class="mb-0 ps-3">
-                <li>Open Terminal (<code>Cmd</code> + <code>Space</code> → type <em>Terminal</em> → <code>Enter</code>).</li>
-                <li>Run:</li>
-              </ol>
-              <pre class="bg-light border rounded py-2 px-2 mt-2 mb-0"><code>/Applications/Tailscale.app/Contents/MacOS/Tailscale up --authkey={{ key_record.key }} --accept-routes{% if login_server %} --login-server {{ login_server }}{% endif %}</code></pre>
-            </div>
-            <div class="border rounded p-3 mb-3">
-              <h3 class="h6">Linux</h3>
-              <ol class="mb-0 ps-3">
-                <li>Open your terminal emulator.</li>
-                <li>Run:</li>
-              </ol>
-              <pre class="bg-light border rounded py-2 px-2 mt-2 mb-0"><code>sudo tailscale up --authkey={{ key_record.key }} --accept-routes{% if login_server %} --login-server {{ login_server }}{% endif %}</code></pre>
-            </div>
-            <div class="border rounded p-3">
-              <h3 class="h6">Windows</h3>
-              <ol class="mb-0 ps-3">
-                <li>Press <code>Win</code> + <code>R</code>, type <code>cmd</code>, then press <code>Enter</code>.</li>
-                <li>Run:</li>
-              </ol>
-              <pre class="bg-light border rounded py-2 px-2 mt-2 mb-0"><code>tailscale up --authkey={{ key_record.key }} --accept-routes{% if login_server %} --login-server {{ login_server }}{% endif %}</code></pre>
-            </div>
-          </div>
-          <p class="mb-1">This command signs your device into the competition network. Keep the key private — anyone with it can join as you.</p>
-          <p class="text-muted mb-1">If you already have Tailscale signed in on this machine, run <code>tailscale logout</code> first or append <code>--force-reauth</code> to the command.</p>
-          {% if key_record.expires_at %}
-            <p class="text-muted mb-0">Key expires on {{ key_record.expires_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC.</p>
-          {% else %}
-            <p class="text-muted mb-0">Key issued {{ key_record.created_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC.</p>
-          {% endif %}
+  {% if key_record %}
+  <div class="card mb-4">
+    <div class="card-body">
+      <h2 class="h5">Connect with Tailscale</h2>
+      <p>Install the Tailscale CLI from <a href="https://tailscale.com/download" target="_blank"
+          rel="noopener">tailscale.com/download</a> or your operating system's package manager, then click below to
+        reveal your personalized commands.</p>
+      <button type="button" class="btn btn-primary" id="reveal-tailscale-command">Show commands</button>
+      <div class="mt-3 d-none" id="tailscale-command-block">
+        <div class="border rounded p-3 mb-3">
+          <h3 class="h6">macOS</h3>
+          <ol class="mb-0 ps-3">
+            <li>Open Terminal (<code>Cmd</code> + <code>Space</code> → type <em>Terminal</em> → <code>Enter</code>).
+            </li>
+            <li>Run:</li>
+          </ol>
+          <pre
+            class="bg-light border rounded py-2 px-2 mt-2 mb-0"><code>/Applications/Tailscale.app/Contents/MacOS/Tailscale login --auth-key {{ key_record.key }}{% if login_server %} --login-server {{ login_server }}{% endif %}</code></pre>
+        </div>
+        <div class="border rounded p-3 mb-3">
+          <h3 class="h6">Linux</h3>
+          <ol class="mb-0 ps-3">
+            <li>Open your terminal emulator.</li>
+            <li>Run:</li>
+          </ol>
+          <pre
+            class="bg-light border rounded py-2 px-2 mt-2 mb-0"><code>sudo tailscale login --auth-key {{ key_record.key }}{% if login_server %} --login-server {{ login_server }}{% endif %}</code></pre>
+        </div>
+        <div class="border rounded p-3">
+          <h3 class="h6">Windows</h3>
+          <ol class="mb-0 ps-3">
+            <li>Press <code>Win</code> + <code>R</code>, type <code>cmd</code>, then press <code>Enter</code>.</li>
+            <li>Run:</li>
+          </ol>
+          <pre
+            class="bg-light border rounded py-2 px-2 mt-2 mb-0"><code>tailscale login --auth-key {{ key_record.key }}{% if login_server %} --login-server {{ login_server }}{% endif %}</code></pre>
+        </div>
+        <button type="button" class="btn btn-outline-secondary" id="show-advanced">
+          Advanced setup (optional)
+        </button>
+        <div class="border rounded p-3 mt-3 d-none" id="advanced-command-block">
+          <h3 class="h6">Stay Connected with <code>tailscale up</code></h3>
+          <p class="mb-2">The login command signs your device into the network and pulls routes automatically. If you want to enable subnet routing, exit node usage, or advertise your own routes, rerun the classic <code>tailscale up</code> command after logging in:</p>
+          <pre class="bg-light border rounded py-2 px-2"><code>tailscale up --accept-routes --accept-dns{% if login_server %} --login-server {{ login_server }}{% endif %}</code></pre>
+          <p class="text-muted mb-0">Use this second step only if you need advanced networking features; most contestants can stay connected with <code>tailscale login</code> alone.</p>
         </div>
       </div>
-    {% else %}
-      <div class="alert alert-warning" role="alert">
-        Your key is being prepared. Refresh this page after a moment or contact the organizers if it does not appear.
-      </div>
-    {% endif %}
+      <p class="mb-1">This command signs your device into the competition network. Keep the key private — anyone with it
+        can join as you.</p>
+      <p class="text-muted mb-1">If you already have Tailscale signed in on this machine, run
+        <code>tailscale logout</code> first or append <code>--force-reauth</code> to the command.</p>
+      {% if key_record.expires_at %}
+      <p class="text-muted mb-0">Key expires on {{ key_record.expires_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC.</p>
+      {% else %}
+      <p class="text-muted mb-0">Key issued {{ key_record.created_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC.</p>
+      {% endif %}
+    </div>
+  </div>
+  {% else %}
+  <div class="alert alert-warning" role="alert">
+    Your key is being prepared. Refresh this page after a moment or contact the organizers if it does not appear.
+  </div>
+  {% endif %}
   {% endif %}
 </div>
 <script>
   document.addEventListener("DOMContentLoaded", function () {
     var revealBtn = document.getElementById("reveal-tailscale-command");
     var commandBlock = document.getElementById("tailscale-command-block");
+    var advancedBtn = document.getElementById("show-advanced");
+    var advancedBlock = document.getElementById("advanced-command-block");
     if (revealBtn && commandBlock) {
       revealBtn.addEventListener("click", function () {
         commandBlock.classList.remove("d-none");
         revealBtn.classList.add("d-none");
+      });
+    }
+    if (advancedBtn && advancedBlock) {
+      advancedBtn.addEventListener("click", function () {
+        advancedBlock.classList.toggle("d-none");
+        advancedBtn.classList.toggle("btn-outline-secondary");
+        advancedBtn.classList.toggle("btn-secondary");
       });
     }
   });

@@ -33,6 +33,7 @@ CONFIG_ALLOWED_CIDRS = "TAILSCALE_ALLOWED_CIDRS"
 CONFIG_SHOW_USER_KEYS = "TAILSCALE_SHOW_USER_KEYS"
 
 DEFAULT_ALLOWED_CIDRS = ["100.64.0.0/10"]
+DEFAULT_KEY_EXPIRATION = datetime.datetime(2099, 12, 31, 23, 59, 59)
 
 logger = logging.getLogger(__name__)
 
@@ -191,6 +192,7 @@ def _generate_and_store_preauth_key(
     headscale_name, headscale_user_id = _ensure_headscale_user(user, client)
     response = client.create_preauth_key(
         headscale_user_id,
+        expiration=DEFAULT_KEY_EXPIRATION,
         acl_tags=acl_tags if acl_tags else None,
     )
     key_value = response.get("key")
@@ -636,6 +638,12 @@ def load(app):
         if request.blueprint == "admin" or request.path.startswith(
             ("/admin", "/_ctfd")
         ):
+            return
+
+        # Defer to CTFd's built-in access controls first. If the user isn't authenticated
+        # (e.g., the core app would redirect to login), we skip additional enforcement.
+        user = get_current_user()
+        if user is None:
             return
 
         if not _get_bool_config(CONFIG_ENFORCE_CONNECTION, False):
