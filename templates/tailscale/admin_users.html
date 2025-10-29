@@ -1,0 +1,113 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="container py-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="mb-0">Headscale Users</h1>
+    <a class="btn btn-secondary" href="{{ url_for('tailscale_admin.admin_settings') }}">Back to Settings</a>
+  </div>
+  <p class="text-muted">
+    Generate new pre-auth keys for contestants. Each Headscale user name follows the format <code>ctfd-user-{{ '{' }}CTFd user ID{{ '}' }}</code> and inherits ACL tags based on team membership.
+  </p>
+
+  <div class="table-responsive">
+    <form method="post" class="mb-3 d-flex align-items-center" style="gap: 0.75rem;">
+      {{ bulk_form.hidden_tag() }}
+      <input type="hidden" value="{{ nonce }}" name="nonce" id="nonce-bulk" />
+      {{ bulk_form.provision_missing(class="btn btn-outline-primary") }}
+      {% if missing_count %}
+        <span class="text-muted">{{ missing_count }} user{{ '' if missing_count == 1 else 's' }} need provisioning.</span>
+      {% else %}
+        <span class="text-muted">All users have Headscale keys.</span>
+      {% endif %}
+    </form>
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th scope="col">CTFd User</th>
+          <th scope="col">Headscale Name</th>
+          <th scope="col">Headscale ID</th>
+          <th scope="col">Email</th>
+          <th scope="col">Team</th>
+          <th scope="col">ACL Tags</th>
+          <th scope="col">Current Key</th>
+          <th scope="col">Last Updated</th>
+          <th scope="col" class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>{{ row.user.name }}</td>
+            <td><code>{{ row.headscale_name }}</code></td>
+            <td>
+              {% if row.headscale_id %}
+                <code>{{ row.headscale_id }}</code>
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+            <td>{{ row.user.email or "—" }}</td>
+            <td>
+              {% if row.user.team_id %}
+                team-{{ row.user.team_id }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            <td>
+              {% if row.acl_tags %}
+                {{ row.acl_tags | join(", ") }}
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            <td>
+              {% if row.key %}
+                <div class="d-flex align-items-center" style="gap: 0.5rem;">
+                  <button type="button" class="btn btn-outline-secondary btn-sm reveal-key-btn" data-key="{{ row.key.key }}" data-target="key-display-{{ row.user.id }}">
+                    Show key
+                  </button>
+                  <code id="key-display-{{ row.user.id }}" class="d-none"></code>
+                </div>
+              {% else %}
+                <span class="text-muted">No key</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if row.key %}
+                {{ row.key.created_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC
+              {% else %}
+                —
+              {% endif %}
+            </td>
+            <td class="text-end">
+              <form method="post" class="d-inline">
+                {{ regenerate_form.hidden_tag() }}
+                {{ regenerate_form.user_id(id="user-id-" ~ row.user.id, value=row.user.id) }}
+                <input type="hidden" value="{{ nonce }}" name="nonce" id="nonce-{{ row.user.id }}" />
+                {{ regenerate_form.submit(class="btn btn-primary btn-sm", value="Generate new key") }}
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    document.querySelectorAll(".reveal-key-btn").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var targetId = button.getAttribute("data-target");
+        var value = button.getAttribute("data-key");
+        var target = document.getElementById(targetId);
+        if (target && value) {
+          target.textContent = value;
+          target.classList.remove("d-none");
+          button.remove();
+        }
+      });
+    });
+  });
+</script>
+{% endblock %}

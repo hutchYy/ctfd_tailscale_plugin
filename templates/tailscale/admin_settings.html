@@ -1,0 +1,113 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="container py-4">
+  <h1 class="mb-3">Headscale Integration</h1>
+
+  {% if status %}
+    <div class="alert alert-{{ "success" if status.ok else "danger" }}" role="alert">
+      {{ status.message }}
+    </div>
+  {% endif %}
+  <div class="mb-4">
+    <a class="btn btn-secondary" href="{{ url_for('tailscale_admin.admin_users') }}">
+      Manage Headscale Users
+    </a>
+  </div>
+
+  <div class="row">
+    <div class="col-lg-6">
+      <div class="card mb-4">
+        <div class="card-header">
+          <h2 class="card-title h5 mb-0">API Credentials</h2>
+        </div>
+        <div class="card-body">
+          <form method="post">
+            {{ settings_form.hidden_tag() }}
+            <input type="hidden" value="{{ nonce }}" name="nonce" id="nonce" />
+            <div class="mb-3">
+              {{ settings_form.api_url.label(class="form-label") }}
+              {{ settings_form.api_url(class="form-control", placeholder="https://headscale.example.com") }}
+              <div class="form-text">{{ settings_form.api_url.description }}</div>
+              {% for error in settings_form.api_url.errors %}
+                <div class="text-danger small">{{ error }}</div>
+              {% endfor %}
+            </div>
+            <div class="mb-3">
+              {{ settings_form.api_token.label(class="form-label") }}
+              <div class="input-group">
+                <span class="form-control form-control-sm text-muted" id="api-token-placeholder">••••••••••••••••••••••</span>
+                {{ settings_form.api_token(class="form-control d-none", id="api-token-input") }}
+                <button class="btn btn-outline-secondary" type="button" id="toggle-api-token">Show token</button>
+              </div>
+              <div class="form-text">{{ settings_form.api_token.description }}</div>
+              {% for error in settings_form.api_token.errors %}
+                <div class="text-danger small">{{ error }}</div>
+              {% endfor %}
+            </div>
+            <div class="form-check mb-3">
+              {{ settings_form.verify_tls(class="form-check-input") }}
+              {{ settings_form.verify_tls.label(class="form-check-label") }}
+              <div class="form-text">{{ settings_form.verify_tls.description }}</div>
+            </div>
+            <div class="form-check mb-3">
+              {{ settings_form.show_user_keys(class="form-check-input") }}
+              {{ settings_form.show_user_keys.label(class="form-check-label") }}
+              <div class="form-text">{{ settings_form.show_user_keys.description }}</div>
+            </div>
+            {{ settings_form.save(class="btn btn-primary") }}
+          </form>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6">
+      <div class="card mb-4">
+        <div class="card-header">
+          <h2 class="card-title h5 mb-0">Challenge Enforcement</h2>
+        </div>
+        <div class="card-body">
+          <form method="post">
+            {{ enforcement_form.hidden_tag() }}
+            <input type="hidden" value="{{ nonce }}" name="nonce" id="nonce" />
+            <div class="form-check mb-3">
+              {{ enforcement_form.enforce_connection(class="form-check-input") }}
+              {{ enforcement_form.enforce_connection.label(class="form-check-label") }}
+              <div class="form-text">{{ enforcement_form.enforce_connection.description }}</div>
+            </div>
+            <div class="mb-3">
+              {{ enforcement_form.allowed_cidrs.label(class="form-label") }}
+              {{ enforcement_form.allowed_cidrs(class="form-control", placeholder="100.64.0.0/10") }}
+              <div class="form-text">{{ enforcement_form.allowed_cidrs.description }}</div>
+              {% for error in enforcement_form.allowed_cidrs.errors %}
+                <div class="text-danger small">{{ error }}</div>
+              {% endfor %}
+            </div>
+            {{ enforcement_form.update(class="btn btn-primary") }}
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    var toggleBtn = document.getElementById("toggle-api-token");
+    var tokenInput = document.getElementById("api-token-input");
+    var placeholder = document.getElementById("api-token-placeholder");
+
+    if (toggleBtn && tokenInput && placeholder) {
+      toggleBtn.addEventListener("click", function () {
+        var isHidden = tokenInput.classList.contains("d-none");
+        if (isHidden) {
+          tokenInput.classList.remove("d-none");
+          placeholder.classList.add("d-none");
+          toggleBtn.textContent = "Hide token";
+        } else {
+          tokenInput.classList.add("d-none");
+          placeholder.classList.remove("d-none");
+          toggleBtn.textContent = "Show token";
+        }
+      });
+    }
+  });
+</script>
+{% endblock %}
