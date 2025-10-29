@@ -4,6 +4,8 @@ This plugin connects a CTFd instance to a Headscale controller so that event org
 
 The implementation follows the [CTFd plugin development guidelines](https://docs.ctfd.io/docs/plugins/overview).
 
+> Tested with Headscale 0.27.0.
+
 ## Features
 
 - Admin settings page for Headscale API URL, bearer token (hidden by default with a show/hide toggle), and TLS verification policy.
