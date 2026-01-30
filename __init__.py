@@ -779,9 +779,7 @@ def load(app):
             return redirect(url_for("auth.login"))
 
         client = _build_headscale_client()
-        if client is None:
-            flash("Headscale integration has not been configured yet.", "error")
-            return redirect(url_for("views.profile"))
+        not_configured = client is None
 
         key_record = HeadscaleUserKey.query.filter_by(user_id=user.id).one_or_none()
         allow_display = _get_bool_config(CONFIG_SHOW_USER_KEYS, False)
@@ -791,6 +789,7 @@ def load(app):
             key_record=key_record,
             allow_display=allow_display,
             login_server=login_server,
+            not_configured=not_configured,
         )
 
     app.register_blueprint(admin_blueprint)

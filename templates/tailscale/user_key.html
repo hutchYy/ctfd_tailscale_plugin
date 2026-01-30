@@ -3,7 +3,11 @@
 <div class="container py-4">
   <h1 class="mb-4">Tailscale Access</h1>
 
-  {% if not allow_display %}
+  {% if not_configured %}
+  <div class="alert alert-warning" role="alert">
+    Tailscale integration has not been configured yet. Please contact the organizers if you believe this is an error.
+  </div>
+  {% elif not allow_display %}
   <div class="alert alert-info" role="alert">
     Organizers have not released the pre-auth keys yet. Please check back closer to the competition start.
   </div>
