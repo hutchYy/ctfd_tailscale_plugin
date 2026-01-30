@@ -10,14 +10,15 @@ import requests
 from flask import Blueprint, flash, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import Forbidden
 
-from CTFd.models import Configs, Users, db
-from CTFd.plugins import register_admin_plugin_menu_bar
-from CTFd.utils import config as ctfd_config
+from CTFd.models import Users, db
+from CTFd.plugins import register_admin_plugin_menu_bar, register_user_page_menu_bar
+from CTFd.utils import get_config, set_config
 from CTFd.utils.decorators import admins_only, authed_only
 from CTFd.utils.user import get_current_user
 
 from .forms import (
     BulkProvisionForm,
+    EditCustomTagsForm,
     EnforcementSettingsForm,
     HeadscaleSettingsForm,
     RegenerateKeyForm,
@@ -31,41 +32,21 @@ CONFIG_VERIFY_TLS = "TAILSCALE_VERIFY_TLS"
 CONFIG_ENFORCE_CONNECTION = "TAILSCALE_ENFORCE_CONNECTION"
 CONFIG_ALLOWED_CIDRS = "TAILSCALE_ALLOWED_CIDRS"
 CONFIG_SHOW_USER_KEYS = "TAILSCALE_SHOW_USER_KEYS"
+CONFIG_TAG_STRATEGY = "TAILSCALE_TAG_STRATEGY"
+CONFIG_LB_GROUPS = "TAILSCALE_LB_GROUPS"
 
 DEFAULT_ALLOWED_CIDRS = ["100.64.0.0/10"]
 DEFAULT_KEY_EXPIRATION = datetime.datetime(2099, 12, 31, 23, 59, 59)
 
 logger = logging.getLogger(__name__)
 
-
-def get_ctfd_config(key: str):
-    """Compatibility wrapper around CTFd's config getter."""
-    getter = getattr(ctfd_config, "get_config", None)
-    if getter is not None:
-        return getter(key)
-    config = Configs.query.filter_by(key=key).one_or_none()
-    return config.value if config else None
+# Track users currently being provisioned to avoid duplicate attempts
+_provisioning_in_progress = set()
 
 
-def set_ctfd_config(key: str, value):
-    """Compatibility wrapper around CTFd's config setter."""
-    setter = getattr(ctfd_config, "set_config", None)
-    if setter is not None:
-        return setter(key, value)
-    config = Configs.query.filter_by(key=key).one_or_none()
-    if config is None:
-        config = Configs(key=key, value=value)
-        db.session.add(config)
-    else:
-        config.value = value
-    db.session.commit()
-    cache = getattr(ctfd_config, "CONFIG_CACHE", None)
-    if isinstance(cache, dict):
-        cache[key] = value
-    pending = getattr(ctfd_config, "CONFIG_CHANGES", None)
-    if isinstance(pending, dict):
-        pending[key] = value
-    return value
+# Use CTFd's built-in config functions directly
+get_ctfd_config = get_config
+set_ctfd_config = set_config
 
 
 try:
@@ -129,15 +110,126 @@ def _set_list_config(key: str, values: List[str]):
     set_ctfd_config(key, cleaned)
 
 
+def _get_ctfd_user_mode() -> str:
+    """
+    Detect whether CTFd is in 'users' mode or 'teams' mode.
+    Returns 'users' or 'teams'.
+    """
+    mode = get_ctfd_config("user_mode")
+    if mode and str(mode).lower() in ("teams", "team"):
+        return "teams"
+    return "users"
+
+
+def _get_lb_groups_count() -> int:
+    """
+    Get the number of load balancer groups configured.
+    Returns 0 if load balancing is disabled.
+    """
+    value = get_ctfd_config(CONFIG_LB_GROUPS)
+    if not value:
+        return 0
+    try:
+        count = int(value)
+        return max(0, count)  # Ensure non-negative
+    except (ValueError, TypeError):
+        return 0
+
+
+def _get_user_lb_group(user) -> Optional[int]:
+    """
+    Deterministically assign a user to a load balancer group.
+    Uses user_id % num_groups to ensure even distribution.
+    Returns None if load balancing is disabled.
+    """
+    num_groups = _get_lb_groups_count()
+    if num_groups <= 0:
+        return None
+    # Use modulo to distribute users evenly across groups
+    # Groups are numbered from 1 to num_groups (not 0-indexed for readability)
+    return (user.id % num_groups) + 1
+
+
 def _headscale_user_name(user) -> str:
     return f"ctfd-user-{user.id}"
 
 
-def _determine_acl_tags(user) -> List[str]:
+def _determine_acl_tags(
+    user, key_record: Optional[HeadscaleUserKey] = None
+) -> List[str]:
+    """
+    Determine ACL tags for a user based on CTFd mode, configuration, and custom tags.
+
+    Tag strategy options:
+    - "auto" (default): Detects CTFd mode and applies appropriate tags
+      - In team mode: adds both user and team tags
+      - In user mode: adds only user tag
+    - "user-only": Only adds user tag (tag:user-{user_id})
+    - "team-only": Only adds team tag if available (tag:team-{team_id})
+    - "both": Always adds both user and team tags (when team exists)
+    - "none": No tags (useful for manual ACL management)
+
+    Custom tags from the key_record are always appended to the strategy-based tags.
+    """
     tags: List[str] = []
+    strategy = get_ctfd_config(CONFIG_TAG_STRATEGY) or "auto"
+    strategy = str(strategy).lower()
+
+    user_id = user.id
     team_id = getattr(user, "team_id", None)
-    if team_id:
-        tags.append(f"tag:team-{team_id}")
+    ctfd_mode = _get_ctfd_user_mode()
+
+    # Determine which tags to add based on strategy
+    if strategy != "none":
+        if strategy == "auto":
+            # Auto mode: adapt to CTFd's current mode
+            if ctfd_mode == "teams":
+                # In team mode, add both user and team tags for granular control
+                tags.append(f"tag:user-{user_id}")
+                if team_id:
+                    tags.append(f"tag:team-{team_id}")
+            else:
+                # In user mode, only add user tag
+                tags.append(f"tag:user-{user_id}")
+
+        elif strategy == "user-only":
+            tags.append(f"tag:user-{user_id}")
+
+        elif strategy == "team-only":
+            if team_id:
+                tags.append(f"tag:team-{team_id}")
+
+        elif strategy == "both":
+            tags.append(f"tag:user-{user_id}")
+            if team_id:
+                tags.append(f"tag:team-{team_id}")
+
+        else:
+            # Unknown strategy, fall back to auto
+            logger.warning(
+                "Unknown TAILSCALE_TAG_STRATEGY '%s', falling back to 'auto'", strategy
+            )
+            tags.append(f"tag:user-{user_id}")
+            if ctfd_mode == "teams" and team_id:
+                tags.append(f"tag:team-{team_id}")
+
+    # Add load balancer group tag if configured
+    lb_group = _get_user_lb_group(user)
+    if lb_group is not None:
+        lb_tag = f"tag:lb-group-{lb_group}"
+        if lb_tag not in tags:
+            tags.append(lb_tag)
+
+    # Add custom tags from the key record
+    if key_record:
+        custom_tags = key_record.get_custom_tags_list()
+        for tag in custom_tags:
+            # Ensure tag has proper format
+            if not tag.startswith("tag:"):
+                tag = f"tag:{tag}"
+            if tag not in tags:
+                tags.append(tag)
+
     return tags
 
 
@@ -161,12 +253,32 @@ def _ensure_headscale_user(user, client: "HeadscaleClient"):
 
 
 def _build_headscale_client() -> Optional["HeadscaleClient"]:
+    """Build a Headscale client from current configuration."""
     api_url = get_ctfd_config(CONFIG_API_URL)
     api_token = get_ctfd_config(CONFIG_API_TOKEN)
     if not (api_url and api_token):
         return None
     verify_tls = _get_bool_config(CONFIG_VERIFY_TLS, True)
-    return HeadscaleClient(api_url, api_token, verify=verify_tls)
+    return HeadscaleClient(api_url, api_token, verify=verify_tls, timeout=10)
+
+
+def _test_headscale_connection() -> tuple[bool, str]:
+    """
+    Test the current Headscale configuration.
+    Returns (success: bool, message: str)
+    """
+    client = _build_headscale_client()
+    if client is None:
+        return False, "Headscale API not configured (missing URL or token)"
+
+    try:
+        status = client.get_status()
+        if status.ok:
+            return True, f"Connected successfully: {status.message}"
+        return False, status.message
+    except Exception as e:
+        logger.warning("Connection test failed: %s", e)
+        return False, f"Connection failed: {str(e)[:200]}"
 
 
 def _get_headscale_login_server() -> Optional[str]:
@@ -230,7 +342,7 @@ class HeadscaleClient:
     """Small wrapper around the Headscale REST API."""
 
     def __init__(
-        self, base_url: str, token: str, verify: bool = True, timeout: int = 10
+        self, base_url: str, token: str, verify: bool = True, timeout: int = 3
     ):
         self.base_url = base_url.rstrip("/")
         self.token = token
@@ -367,6 +479,7 @@ class HeadscaleClient:
 
 def load(app):
     register_admin_plugin_menu_bar("Headscale Integration", "/admin/tailscale/")
+    register_user_page_menu_bar("Tailscale", "/tailscale/key")
 
     admin_blueprint = Blueprint(
         "tailscale_admin",
@@ -384,6 +497,19 @@ def load(app):
 
     with app.app_context():
         HeadscaleUserKey.__table__.create(bind=db.engine, checkfirst=True)
+
+        # Run migrations using CTFd's built-in migration system
+        try:
+            from CTFd.plugins.migrations import upgrade
+
+            logger.info("Running database migrations for CTFd Tailscale plugin")
+            upgrade()
+        except Exception as e:
+            logger.warning(
+                "Failed to run automatic migrations: %s. "
+                "You may need to run migrations manually.",
+                e,
+            )
 
     @admin_blueprint.route("/", methods=["GET", "POST"])
     @admins_only
@@ -407,6 +533,7 @@ def load(app):
             and settings_form.save.data
             and settings_form.validate_on_submit()
         ):
+            # Save settings
             set_ctfd_config(CONFIG_API_URL, settings_form.api_url.data.strip())
             set_ctfd_config(CONFIG_API_TOKEN, settings_form.api_token.data.strip())
             set_ctfd_config(
@@ -416,7 +543,13 @@ def load(app):
                 CONFIG_SHOW_USER_KEYS,
                 "true" if settings_form.show_user_keys.data else "false",
             )
-            flash("Headscale settings have been saved.", "success")
+            set_ctfd_config(
+                CONFIG_TAG_STRATEGY, settings_form.tag_strategy.data or "auto"
+            )
+            lb_groups = settings_form.lb_groups.data or 0
+            set_ctfd_config(CONFIG_LB_GROUPS, str(lb_groups))
+
+            flash("Headscale settings saved successfully.", "success")
             return redirect(url_for("tailscale_admin.admin_settings"))
 
         if (
@@ -440,6 +573,10 @@ def load(app):
             settings_form.show_user_keys.data = _get_bool_config(
                 CONFIG_SHOW_USER_KEYS, False
             )
+            settings_form.tag_strategy.data = (
+                get_ctfd_config(CONFIG_TAG_STRATEGY) or "auto"
+            )
+            settings_form.lb_groups.data = _get_lb_groups_count()
 
         if not enforcement_form.is_submitted():
             enforcement_form.enforce_connection.data = _get_bool_config(
@@ -448,18 +585,23 @@ def load(app):
             cidrs = _get_list_config(CONFIG_ALLOWED_CIDRS, DEFAULT_ALLOWED_CIDRS)
             enforcement_form.allowed_cidrs.data = ", ".join(cidrs)
 
-        status = None
-        client = _build_headscale_client()
-        if client is not None:
-            status = client.get_status()
-
         return render_template(
             "tailscale/admin_settings.html",
             settings_form=settings_form,
             enforcement_form=enforcement_form,
-            status=status,
             nonce=generate_nonce(),
         )
+
+    @admin_blueprint.route("/test-connection", methods=["POST"])
+    @admins_only
+    def test_connection():
+        """Test the Headscale connection and return JSON result."""
+        nonce_value = request.form.get("nonce")
+        if not is_nonce_valid(nonce_value):
+            return {"success": False, "message": "Invalid session token"}, 403
+
+        success, message = _test_headscale_connection()
+        return {"success": success, "message": message}
 
     @admin_blueprint.route("/users", methods=["GET", "POST"])
     @admins_only
@@ -472,6 +614,7 @@ def load(app):
         formdata = request.form if request.method == "POST" else None
         regenerate_form = RegenerateKeyForm(formdata=formdata)
         bulk_form = BulkProvisionForm(formdata=formdata)
+        custom_tags_form = EditCustomTagsForm(formdata=formdata)
         nonce_valid = True
         if request.method == "POST":
             nonce_value = request.form.get("nonce")
@@ -499,8 +642,11 @@ def load(app):
                     failures = []
                     for target_user in missing_users:
                         try:
+                            existing_key = key_map.get(target_user.id)
                             key_record = _generate_and_store_preauth_key(
-                                target_user, client, _determine_acl_tags(target_user)
+                                target_user,
+                                client,
+                                _determine_acl_tags(target_user, existing_key),
                             )
                             key_map[target_user.id] = key_record
                             provisioned += 1
@@ -533,8 +679,11 @@ def load(app):
                     )
                     if target_user is None:
                         raise ValueError("Selected user no longer exists.")
+                    existing_key = key_map.get(target_user.id)
                     key_record = _generate_and_store_preauth_key(
-                        target_user, client, _determine_acl_tags(target_user)
+                        target_user,
+                        client,
+                        _determine_acl_tags(target_user, existing_key),
                     )
                     key_map[target_user.id] = key_record
                     flash(
@@ -548,6 +697,48 @@ def load(app):
                     )
                     db.session.rollback()
                     flash(f"Failed to generate a Headscale key: {exc}", "error")
+            if (
+                custom_tags_form.update_tags.data
+                and custom_tags_form.validate_on_submit()
+            ):
+                try:
+                    target_id = custom_tags_form.user_id.data or ""
+                    target_user = next(
+                        (u for u in users if str(u.id) == target_id), None
+                    )
+                    if target_user is None:
+                        raise ValueError("Selected user no longer exists.")
+                    key_record = key_map.get(target_user.id)
+                    if key_record is None:
+                        flash(
+                            f"User {target_user.name} must be provisioned before adding custom tags.",
+                            "warning",
+                        )
+                    else:
+                        # Parse and clean the custom tags input
+                        tags_input = custom_tags_form.custom_tags.data or ""
+                        tags_list = [
+                            tag.strip() for tag in tags_input.split(",") if tag.strip()
+                        ]
+                        key_record.set_custom_tags_list(tags_list)
+                        db.session.commit()
+
+                        # Regenerate the preauth key with new tags
+                        key_record = _generate_and_store_preauth_key(
+                            target_user,
+                            client,
+                            _determine_acl_tags(target_user, key_record),
+                        )
+                        key_map[target_user.id] = key_record
+                        flash(
+                            f"Updated custom tags for {target_user.name} and regenerated key.",
+                            "success",
+                        )
+                    return redirect(url_for("tailscale_admin.admin_users"))
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("Failed to update custom tags from admin panel")
+                    db.session.rollback()
+                    flash(f"Failed to update custom tags: {exc}", "error")
 
         rows = []
         for user in users:
@@ -557,7 +748,8 @@ def load(app):
                 {
                     "user": user,
                     "key": key_entry,
-                    "acl_tags": _determine_acl_tags(user),
+                    "acl_tags": _determine_acl_tags(user, key_entry),
+                    "lb_group": _get_user_lb_group(user),
                     "headscale_name": _headscale_user_name(user),
                     "headscale_id": key_entry.headscale_user if key_entry else None,
                     "needs_provision": needs_provision,
@@ -565,12 +757,17 @@ def load(app):
             )
         regenerate_form.user_id.data = ""
         missing_count = sum(1 for row in rows if row["needs_provision"])
+        lb_groups_count = _get_lb_groups_count()
+        lb_groups_enabled = lb_groups_count > 0
         return render_template(
             "tailscale/admin_users.html",
             rows=rows,
             regenerate_form=regenerate_form,
             bulk_form=bulk_form,
+            custom_tags_form=custom_tags_form,
             missing_count=missing_count,
+            lb_groups_enabled=lb_groups_enabled,
+            lb_groups_count=lb_groups_count,
             nonce=generate_nonce(),
         )
 
@@ -612,26 +809,50 @@ def load(app):
 
     @app.before_request
     def auto_provision_tailscale_key():
+        """
+        Auto-provision Headscale keys for users.
+
+        Uses short timeout and skip-if-in-progress logic to avoid blocking requests.
+        """
         user = get_current_user()
         if user is None:
             return
         user_type = getattr(user, "type", None)
         if user_type and user_type.lower() != "user":
             return
+
+        # Skip if already provisioned
         existing_key = HeadscaleUserKey.query.filter_by(user_id=user.id).one_or_none()
         if existing_key is not None:
             return
+
+        # Skip if provisioning already in progress for this user (prevents duplicate attempts)
+        if user.id in _provisioning_in_progress:
+            logger.debug(
+                "Skipping auto-provision for user %s - already in progress", user.id
+            )
+            return
+
+        # Build client
         client = _build_headscale_client()
         if client is None:
             return
+
+        # Mark as in progress
+        _provisioning_in_progress.add(user.id)
+
         try:
             _generate_and_store_preauth_key(user, client, _determine_acl_tags(user))
+            logger.info("Auto-provisioned Headscale key for user %s", user.id)
         except Exception:  # noqa: BLE001
             logger.exception(
                 "Automatic Headscale key provisioning failed for user_id=%s", user.id
             )
             db.session.rollback()
-            # Swallow the error so normal request handling continues.
+            # Swallow the error so normal request handling continues
+        finally:
+            # Always remove from in-progress set
+            _provisioning_in_progress.discard(user.id)
 
     @app.before_request
     def require_tailscale_for_challenges():

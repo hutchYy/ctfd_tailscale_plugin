@@ -6,7 +6,7 @@
     <a class="btn btn-secondary" href="{{ url_for('tailscale_admin.admin_settings') }}">Back to Settings</a>
   </div>
   <p class="text-muted">
-    Generate new pre-auth keys for contestants. Each Headscale user name follows the format <code>ctfd-user-{{ '{' }}CTFd user ID{{ '}' }}</code> and inherits ACL tags based on team membership.
+    Generate new pre-auth keys for contestants. Each Headscale user name follows the format <code>ctfd-user-{{ '{' }}CTFd user ID{{ '}' }}</code> and inherits ACL tags based on team membership.{% if lb_groups_enabled %} Users are automatically distributed across {{ lb_groups_count }} load balancer group{{ 's' if lb_groups_count != 1 else '' }}.{% endif %} You can also add custom tags for additional control.
   </p>
 
   <div class="table-responsive">
@@ -28,7 +28,11 @@
           <th scope="col">Headscale ID</th>
           <th scope="col">Email</th>
           <th scope="col">Team</th>
+          {% if lb_groups_enabled %}
+            <th scope="col">LB Group</th>
+          {% endif %}
           <th scope="col">ACL Tags</th>
+          <th scope="col">Custom Tags</th>
           <th scope="col">Current Key</th>
           <th scope="col">Last Updated</th>
           <th scope="col" class="text-end">Actions</th>
@@ -54,11 +58,27 @@
                 —
               {% endif %}
             </td>
+            {% if lb_groups_enabled %}
+              <td>
+                {% if row.lb_group %}
+                  <span class="badge bg-primary">Group {{ row.lb_group }}</span>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+            {% endif %}
             <td>
               {% if row.acl_tags %}
                 {{ row.acl_tags | join(", ") }}
               {% else %}
                 —
+              {% endif %}
+            </td>
+            <td>
+              {% if row.key and row.key.custom_tags %}
+                <span class="badge bg-secondary">{{ row.key.custom_tags }}</span>
+              {% else %}
+                <span class="text-muted">—</span>
               {% endif %}
             </td>
             <td>
@@ -81,12 +101,17 @@
               {% endif %}
             </td>
             <td class="text-end">
-              <form method="post" class="d-inline">
-                {{ regenerate_form.hidden_tag() }}
-                {{ regenerate_form.user_id(id="user-id-" ~ row.user.id, value=row.user.id) }}
-                <input type="hidden" value="{{ nonce }}" name="nonce" id="nonce-{{ row.user.id }}" />
-                {{ regenerate_form.submit(class="btn btn-primary btn-sm", value="Generate new key") }}
-              </form>
+              <div class="d-flex justify-content-end" style="gap: 0.5rem;">
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#editTagsModal" data-user-id="{{ row.user.id }}" data-user-name="{{ row.user.name }}" data-custom-tags="{{ row.key.custom_tags if row.key and row.key.custom_tags else '' }}" onclick="openEditTagsModal(this)">
+                  Edit Tags
+                </button>
+                <form method="post" class="d-inline">
+                  {{ regenerate_form.hidden_tag() }}
+                  {{ regenerate_form.user_id(id="user-id-" ~ row.user.id, value=row.user.id) }}
+                  <input type="hidden" value="{{ nonce }}" name="nonce" id="nonce-{{ row.user.id }}" />
+                  {{ regenerate_form.submit(class="btn btn-primary btn-sm", value="Generate new key") }}
+                </form>
+              </div>
             </td>
           </tr>
         {% endfor %}
@@ -94,7 +119,50 @@
     </table>
   </div>
 </div>
+
+<!-- Modal for editing custom tags -->
+<div class="modal fade" id="editTagsModal" tabindex="-1" aria-labelledby="editTagsModalLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="editTagsModalLabel">Edit Custom Tags</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <form method="post">
+        <div class="modal-body">
+          {{ custom_tags_form.hidden_tag() }}
+          {{ custom_tags_form.user_id(id="modal-user-id") }}
+          <input type="hidden" value="{{ nonce }}" name="nonce" id="nonce-modal" />
+          <p class="text-muted">User: <strong id="modal-user-name"></strong></p>
+          <div class="mb-3">
+            {{ custom_tags_form.custom_tags.label(class="form-label") }}
+            {{ custom_tags_form.custom_tags(class="form-control", id="modal-custom-tags", placeholder="e.g., loadbalancer-1, premium, region-us-east") }}
+            <div class="form-text">{{ custom_tags_form.custom_tags.description }}</div>
+          </div>
+          <div class="alert alert-info" role="alert">
+            <strong>Note:</strong> Updating custom tags will automatically regenerate the user's pre-auth key with the new tags applied.
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          {{ custom_tags_form.update_tags(class="btn btn-primary") }}
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
 <script>
+  function openEditTagsModal(button) {
+    var userId = button.getAttribute("data-user-id");
+    var userName = button.getAttribute("data-user-name");
+    var customTags = button.getAttribute("data-custom-tags");
+
+    document.getElementById("modal-user-id").value = userId;
+    document.getElementById("modal-user-name").textContent = userName;
+    document.getElementById("modal-custom-tags").value = customTags;
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     document.querySelectorAll(".reveal-key-btn").forEach(function (button) {
       button.addEventListener("click", function () {
