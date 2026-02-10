@@ -20,7 +20,7 @@ class BaseForm(Form):
 class HeadscaleSettingsForm(BaseForm):
     api_url = StringField(
         "Headscale API URL",
-        validators=[DataRequired(message="API URL is required"), URL(message="Enter a valid URL")],
+        validators=[DataRequired(message="API URL is required"), URL(require_tld=False, message="Enter a valid URL")],
         description="Base URL to your Headscale server (e.g., https://headscale.example.com). "
                     "This is the endpoint where the plugin will make API calls to manage users and generate pre-auth keys.",
     )
