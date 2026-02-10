@@ -1,144 +1,301 @@
 {% extends "admin/base.html" %}
 {% block content %}
-<div class="container py-4">
-  <h1 class="mb-3">Headscale Integration</h1>
+<style>
+  .ts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.25rem;
+  }
+  @media (max-width: 991.98px) {
+    .ts-grid { grid-template-columns: 1fr; }
+  }
+  .ts-grid .card {
+    border: none;
+    border-radius: .625rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+    transition: box-shadow .15s ease;
+  }
+  .ts-grid .card:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,.1), 0 2px 4px rgba(0,0,0,.06);
+  }
+  .ts-grid .card-header {
+    background: transparent;
+    border-bottom: 1px solid rgba(0,0,0,.06);
+    padding: 1rem 1.25rem .75rem;
+  }
+  .ts-grid .card-body { padding: 1.25rem; }
+  .ts-grid .card-footer {
+    background: transparent;
+    border-top: 1px solid rgba(0,0,0,.06);
+    padding: .75rem 1.25rem;
+  }
+  .ts-page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: .75rem;
+    margin-bottom: 1.5rem;
+  }
+  .ts-page-header h1 { margin: 0; }
+</style>
 
-  <div class="mb-4">
-    <a class="btn btn-secondary" href="{{ url_for('tailscale_admin.admin_users') }}">
+<div class="container py-4">
+  <div class="ts-page-header">
+    <h1>Headscale Integration</h1>
+    <a class="btn btn-outline-secondary" href="{{ url_for('tailscale_admin.admin_users') }}">
       Manage Headscale Users
     </a>
-    <button class="btn btn-outline-primary" id="test-connection-btn">
-      <span id="test-spinner" class="spinner-border spinner-border-sm d-none me-1"></span>
-      Test Connection
-    </button>
   </div>
 
-  <div id="connection-status" class="alert d-none mb-4" role="alert"></div>
+  <div class="ts-grid">
 
-  <div class="row">
-    <div class="col-lg-6">
-      <div class="card mb-4">
+    {# ── API Connection ── #}
+    <div class="card">
+      <form method="post" id="api-form">
+        {{ api_form.hidden_tag() }}
+        <input type="hidden" value="{{ nonce }}" name="nonce" />
         <div class="card-header">
-          <h2 class="card-title h5 mb-0">API Credentials</h2>
+          <h2 class="card-title h5 mb-0">API Connection <small class="text-muted fw-normal">(server-side)</small></h2>
         </div>
         <div class="card-body">
-          <form method="post">
-            {{ settings_form.hidden_tag() }}
-            <input type="hidden" value="{{ nonce }}" name="nonce" id="nonce" />
-            <div class="mb-3">
-              {{ settings_form.api_url.label(class="form-label") }}
-              {{ settings_form.api_url(class="form-control", placeholder="https://headscale.example.com") }}
-              <div class="form-text">{{ settings_form.api_url.description }}</div>
-              {% for error in settings_form.api_url.errors %}
-                <div class="text-danger small">{{ error }}</div>
-              {% endfor %}
+          <p class="text-muted small mb-3">Used by the plugin to talk to your Headscale server. Never shown to contestants.</p>
+          <div class="mb-3">
+            {{ api_form.api_url.label(class="form-label") }}
+            <span class="text-muted" data-bs-toggle="tooltip" data-bs-placement="right"
+              title="Internal URL used by the CTFd server to reach the Headscale API. Can be an internal hostname (e.g. http://headscale:8080). Contestants never see this.">&#9432;</span>
+            {{ api_form.api_url(class="form-control", placeholder="http://headscale:8080") }}
+            <div class="form-text">{{ api_form.api_url.description }}</div>
+            {% for error in api_form.api_url.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
+          <div class="mb-3">
+            {{ api_form.api_token.label(class="form-label") }}
+            {% if has_token %}
+            <div id="token-status" class="d-flex align-items-center mb-2">
+              <span class="badge bg-success me-2">Configured</span>
+              <span class="text-muted small me-2">Token is set.</span>
+              <button type="button" class="btn btn-sm btn-outline-secondary" id="change-token-btn">Change token</button>
             </div>
-            <div class="mb-3">
-              {{ settings_form.api_token.label(class="form-label") }}
-              <div class="input-group">
-                <span class="form-control form-control-sm text-muted" id="api-token-placeholder">••••••••••••••••••••••</span>
-                {{ settings_form.api_token(class="form-control d-none", id="api-token-input") }}
-                <button class="btn btn-outline-secondary" type="button" id="toggle-api-token">Show token</button>
+            <div class="input-group d-none" id="token-input-group">
+              {{ api_form.api_token(class="form-control", id="api-token-input", placeholder="Paste new token to replace the current one") }}
+              <button class="btn btn-outline-secondary" type="button" id="toggle-api-token">Show</button>
+            </div>
+            <div class="form-text d-none" id="token-help-text">Leave empty to keep the current token.</div>
+            {% else %}
+            <div class="input-group">
+              {{ api_form.api_token(class="form-control", id="api-token-input", placeholder="Paste your API token here") }}
+              <button class="btn btn-outline-secondary" type="button" id="toggle-api-token">Show</button>
+            </div>
+            <div class="form-text">{{ api_form.api_token.description }}</div>
+            {% endif %}
+            {% for error in api_form.api_token.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
+          <div class="form-check mb-3">
+            {{ api_form.verify_tls(class="form-check-input") }}
+            {{ api_form.verify_tls.label(class="form-check-label") }}
+            <div class="form-text">{{ api_form.verify_tls.description }}</div>
+          </div>
+          <hr class="my-3">
+          <button type="button" class="btn btn-outline-primary" id="test-connection-btn">
+            <span id="test-spinner" class="spinner-border spinner-border-sm d-none me-1" role="status"></span>
+            <span id="test-btn-label">Test Connection</span>
+          </button>
+          <div class="form-text">Tests the last saved configuration.</div>
+          <div id="connection-status" class="alert d-none mt-3 mb-0" role="alert">
+            <div class="d-flex align-items-start">
+              <span id="status-icon" class="me-2 fs-5"></span>
+              <div>
+                <strong id="status-heading"></strong>
+                <div id="status-message" class="mt-1"></div>
               </div>
-              <div class="form-text">{{ settings_form.api_token.description }}</div>
-              {% for error in settings_form.api_token.errors %}
-                <div class="text-danger small">{{ error }}</div>
-              {% endfor %}
             </div>
-            <div class="form-check mb-3">
-              {{ settings_form.verify_tls(class="form-check-input") }}
-              {{ settings_form.verify_tls.label(class="form-check-label") }}
-              <div class="form-text">{{ settings_form.verify_tls.description }}</div>
-            </div>
-            <div class="form-check mb-3">
-              {{ settings_form.show_user_keys(class="form-check-input") }}
-              {{ settings_form.show_user_keys.label(class="form-check-label") }}
-              <div class="form-text">{{ settings_form.show_user_keys.description }}</div>
-            </div>
-            <div class="mb-3">
-              {{ settings_form.tag_strategy.label(class="form-label") }}
-              {{ settings_form.tag_strategy(class="form-select") }}
-              <div class="form-text">{{ settings_form.tag_strategy.description }}</div>
-              {% for error in settings_form.tag_strategy.errors %}
-                <div class="text-danger small">{{ error }}</div>
-              {% endfor %}
-            </div>
-            <div class="mb-3">
-              {{ settings_form.lb_groups.label(class="form-label") }}
-              {{ settings_form.lb_groups(class="form-control", type="number", min="0", max="100", placeholder="0") }}
-              <div class="form-text">{{ settings_form.lb_groups.description }}</div>
-              {% for error in settings_form.lb_groups.errors %}
-                <div class="text-danger small">{{ error }}</div>
-              {% endfor %}
-            </div>
-            {{ settings_form.save(class="btn btn-primary") }}
-          </form>
+          </div>
         </div>
-      </div>
+        <div class="card-footer text-end">
+          {{ api_form.save_api(class="btn btn-primary btn-sm") }}
+        </div>
+      </form>
     </div>
-    <div class="col-lg-6">
-      <div class="card mb-4">
+
+    {# ── Contestant Settings ── #}
+    <div class="card">
+      <form method="post" id="contestant-form">
+        {{ contestant_form.hidden_tag() }}
+        <input type="hidden" value="{{ nonce }}" name="nonce" />
+        <div class="card-header">
+          <h2 class="card-title h5 mb-0">Contestant Settings <small class="text-muted fw-normal">(user-facing)</small></h2>
+        </div>
+        <div class="card-body">
+          <p class="text-muted small mb-3">Controls what contestants see and how they connect to the network.</p>
+          <div class="mb-3">
+            {{ contestant_form.login_server.label(class="form-label") }}
+            <span class="text-muted" data-bs-toggle="tooltip" data-bs-placement="right"
+              title="The URL shown to contestants in their 'tailscale login --login-server' command. Set this when the API URL above is an internal address that contestants cannot reach. If left empty, the API URL is used instead.">&#9432;</span>
+            {{ contestant_form.login_server(class="form-control", placeholder="https://headscale.example.com") }}
+            <div class="form-text">{{ contestant_form.login_server.description }}</div>
+            {% for error in contestant_form.login_server.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
+          <div class="form-check mb-3">
+            {{ contestant_form.show_user_keys(class="form-check-input") }}
+            {{ contestant_form.show_user_keys.label(class="form-check-label") }}
+            <div class="form-text">{{ contestant_form.show_user_keys.description }}</div>
+          </div>
+        </div>
+        <div class="card-footer text-end">
+          {{ contestant_form.save_contestant(class="btn btn-primary btn-sm") }}
+        </div>
+      </form>
+    </div>
+
+    {# ── ACL & Tagging ── #}
+    <div class="card">
+      <form method="post" id="acl-form">
+        {{ acl_form.hidden_tag() }}
+        <input type="hidden" value="{{ nonce }}" name="nonce" />
+        <div class="card-header">
+          <h2 class="card-title h5 mb-0">ACL & Tagging</h2>
+        </div>
+        <div class="card-body">
+          <p class="text-muted small mb-3">Configure how users are tagged in Headscale for access control and load distribution.</p>
+          <div class="mb-3">
+            {{ acl_form.tag_strategy.label(class="form-label") }}
+            {{ acl_form.tag_strategy(class="form-select") }}
+            <div class="form-text">{{ acl_form.tag_strategy.description }}</div>
+            {% for error in acl_form.tag_strategy.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
+          <div class="mb-3">
+            {{ acl_form.lb_groups.label(class="form-label") }}
+            {{ acl_form.lb_groups(class="form-control", type="number", min="0", max="100", placeholder="0") }}
+            <div class="form-text">{{ acl_form.lb_groups.description }}</div>
+            {% for error in acl_form.lb_groups.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="card-footer text-end">
+          {{ acl_form.save_acl(class="btn btn-primary btn-sm") }}
+        </div>
+      </form>
+    </div>
+
+    {# ── Challenge Enforcement ── #}
+    <div class="card">
+      <form method="post" id="enforcement-form">
+        {{ enforcement_form.hidden_tag() }}
+        <input type="hidden" value="{{ nonce }}" name="nonce" />
         <div class="card-header">
           <h2 class="card-title h5 mb-0">Challenge Enforcement</h2>
         </div>
         <div class="card-body">
-          <form method="post">
-            {{ enforcement_form.hidden_tag() }}
-            <input type="hidden" value="{{ nonce }}" name="nonce" id="nonce" />
-            <div class="form-check mb-3">
-              {{ enforcement_form.enforce_connection(class="form-check-input") }}
-              {{ enforcement_form.enforce_connection.label(class="form-check-label") }}
-              <div class="form-text">{{ enforcement_form.enforce_connection.description }}</div>
-            </div>
-            <div class="mb-3">
-              {{ enforcement_form.allowed_cidrs.label(class="form-label") }}
-              {{ enforcement_form.allowed_cidrs(class="form-control", placeholder="100.64.0.0/10") }}
-              <div class="form-text">{{ enforcement_form.allowed_cidrs.description }}</div>
-              {% for error in enforcement_form.allowed_cidrs.errors %}
-                <div class="text-danger small">{{ error }}</div>
-              {% endfor %}
-            </div>
-            {{ enforcement_form.update(class="btn btn-primary") }}
-          </form>
+          <p class="text-muted small mb-3">Restrict challenge access to contestants connected through specific network ranges.</p>
+          <div class="form-check mb-3">
+            {{ enforcement_form.enforce_connection(class="form-check-input") }}
+            {{ enforcement_form.enforce_connection.label(class="form-check-label") }}
+            <div class="form-text">{{ enforcement_form.enforce_connection.description }}</div>
+          </div>
+          <div class="mb-3">
+            {{ enforcement_form.allowed_cidrs.label(class="form-label") }}
+            {{ enforcement_form.allowed_cidrs(class="form-control", placeholder="100.64.0.0/10") }}
+            <div class="form-text">{{ enforcement_form.allowed_cidrs.description }}</div>
+            {% for error in enforcement_form.allowed_cidrs.errors %}
+              <div class="text-danger small">{{ error }}</div>
+            {% endfor %}
+          </div>
         </div>
-      </div>
+        <div class="card-footer text-end">
+          {{ enforcement_form.save_enforcement(class="btn btn-primary btn-sm") }}
+        </div>
+      </form>
     </div>
+
   </div>
 </div>
+
 <script>
   document.addEventListener("DOMContentLoaded", function () {
+    // Initialize Bootstrap tooltips (guard against missing bootstrap global)
+    try {
+      var Tooltip = (typeof bootstrap !== "undefined" && bootstrap.Tooltip) ||
+                    (typeof jQuery !== "undefined" && jQuery.fn.tooltip && function(el) { jQuery(el).tooltip(); });
+      if (Tooltip) {
+        var tooltipEls = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+        tooltipEls.forEach(function (el) {
+          if (Tooltip.prototype) { new Tooltip(el); } else { Tooltip(el); }
+        });
+      }
+    } catch (e) {
+      console.warn("Tooltip init skipped:", e);
+    }
+
+    // "Change token" reveal button
+    var changeTokenBtn = document.getElementById("change-token-btn");
+    var tokenStatus = document.getElementById("token-status");
+    var tokenInputGroup = document.getElementById("token-input-group");
+    var tokenHelpText = document.getElementById("token-help-text");
+
+    if (changeTokenBtn && tokenInputGroup) {
+      changeTokenBtn.addEventListener("click", function () {
+        tokenStatus.classList.add("d-none");
+        tokenInputGroup.classList.remove("d-none");
+        tokenHelpText.classList.remove("d-none");
+        var input = document.getElementById("api-token-input");
+        if (input) input.focus();
+      });
+    }
+
+    // Show/hide token toggle
     var toggleBtn = document.getElementById("toggle-api-token");
     var tokenInput = document.getElementById("api-token-input");
-    var placeholder = document.getElementById("api-token-placeholder");
 
-    if (toggleBtn && tokenInput && placeholder) {
+    if (toggleBtn && tokenInput) {
       toggleBtn.addEventListener("click", function () {
-        var isHidden = tokenInput.classList.contains("d-none");
-        if (isHidden) {
-          tokenInput.classList.remove("d-none");
-          placeholder.classList.add("d-none");
-          toggleBtn.textContent = "Hide token";
-        } else {
-          tokenInput.classList.add("d-none");
-          placeholder.classList.remove("d-none");
-          toggleBtn.textContent = "Show token";
-        }
+        var isPassword = tokenInput.type === "password";
+        tokenInput.type = isPassword ? "text" : "password";
+        toggleBtn.textContent = isPassword ? "Hide" : "Show";
       });
     }
 
     // Test connection button
     var testBtn = document.getElementById("test-connection-btn");
     var testSpinner = document.getElementById("test-spinner");
+    var btnLabel = document.getElementById("test-btn-label");
     var statusDiv = document.getElementById("connection-status");
+    var statusIcon = document.getElementById("status-icon");
+    var statusHeading = document.getElementById("status-heading");
+    var statusMessage = document.getElementById("status-message");
 
-    if (testBtn && testSpinner && statusDiv) {
+    function showResult(success, message) {
+      testSpinner.classList.add("d-none");
+      btnLabel.textContent = "Test Connection";
+      testBtn.disabled = false;
+
+      statusDiv.classList.remove("d-none", "alert-success", "alert-danger", "alert-warning");
+      statusDiv.classList.add(success ? "alert-success" : "alert-danger");
+      statusIcon.textContent = success ? "\u2705" : "\u274C";
+      statusHeading.textContent = success ? "Connection successful" : "Connection failed";
+      statusMessage.textContent = message;
+    }
+
+    if (testBtn && statusDiv) {
       testBtn.addEventListener("click", function () {
-        // Show spinner, disable button
         testSpinner.classList.remove("d-none");
+        btnLabel.textContent = "Testing\u2026";
         testBtn.disabled = true;
-        statusDiv.classList.add("d-none");
 
-        // Make request
+        statusDiv.classList.remove("d-none", "alert-success", "alert-danger");
+        statusDiv.classList.add("alert-warning");
+        statusIcon.textContent = "\u23F3";
+        statusHeading.textContent = "Testing connection\u2026";
+        statusMessage.textContent = "Reaching out to the Headscale API, this may take a few seconds.";
+
         var formData = new FormData();
         formData.append("nonce", "{{ nonce }}");
 
@@ -150,27 +307,32 @@
           return response.json();
         })
         .then(function(data) {
-          // Hide spinner, enable button
-          testSpinner.classList.add("d-none");
-          testBtn.disabled = false;
-
-          // Show status
-          statusDiv.classList.remove("d-none", "alert-success", "alert-danger");
-          statusDiv.classList.add(data.success ? "alert-success" : "alert-danger");
-          statusDiv.textContent = data.message;
+          showResult(data.success, data.message);
         })
         .catch(function(error) {
-          // Hide spinner, enable button
-          testSpinner.classList.add("d-none");
-          testBtn.disabled = false;
-
-          // Show error
-          statusDiv.classList.remove("d-none", "alert-success", "alert-danger");
-          statusDiv.classList.add("alert-danger");
-          statusDiv.textContent = "Error testing connection: " + error.message;
+          showResult(false, "Network error: " + error.message);
         });
       });
     }
+
+    // Unsaved changes warning (per-form)
+    var forms = document.querySelectorAll("#api-form, #contestant-form, #acl-form, #enforcement-form");
+    var formDirty = false;
+
+    function markDirty() { formDirty = true; }
+
+    forms.forEach(function (form) {
+      form.addEventListener("input", markDirty);
+      form.addEventListener("change", markDirty);
+      form.addEventListener("submit", function () { formDirty = false; });
+    });
+
+    window.addEventListener("beforeunload", function (e) {
+      if (formDirty) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    });
   });
 </script>
 {% endblock %}

@@ -17,23 +17,26 @@ from CTFd.utils.decorators import admins_only, authed_only
 from CTFd.utils.user import get_current_user
 
 from .forms import (
+    AclTaggingForm,
+    ApiConnectionForm,
     BulkProvisionForm,
+    ContestantSettingsForm,
     EditCustomTagsForm,
     EnforcementSettingsForm,
-    HeadscaleSettingsForm,
     RegenerateKeyForm,
 )
 from .models import HeadscaleUserKey
 
 
-CONFIG_API_URL = "TAILSCALE_API_URL"
-CONFIG_API_TOKEN = "TAILSCALE_API_TOKEN"
-CONFIG_VERIFY_TLS = "TAILSCALE_VERIFY_TLS"
-CONFIG_ENFORCE_CONNECTION = "TAILSCALE_ENFORCE_CONNECTION"
-CONFIG_ALLOWED_CIDRS = "TAILSCALE_ALLOWED_CIDRS"
-CONFIG_SHOW_USER_KEYS = "TAILSCALE_SHOW_USER_KEYS"
-CONFIG_TAG_STRATEGY = "TAILSCALE_TAG_STRATEGY"
-CONFIG_LB_GROUPS = "TAILSCALE_LB_GROUPS"
+CONFIG_API_URL = "tailscale:api_url"
+CONFIG_API_TOKEN = "tailscale:api_token"
+CONFIG_VERIFY_TLS = "tailscale:verify_tls"
+CONFIG_ENFORCE_CONNECTION = "tailscale:enforce_connection"
+CONFIG_ALLOWED_CIDRS = "tailscale:allowed_cidrs"
+CONFIG_SHOW_USER_KEYS = "tailscale:show_user_keys"
+CONFIG_TAG_STRATEGY = "tailscale:tag_strategy"
+CONFIG_LB_GROUPS = "tailscale:lb_groups"
+CONFIG_LOGIN_SERVER = "tailscale:login_server"
 
 DEFAULT_ALLOWED_CIDRS = ["100.64.0.0/10"]
 DEFAULT_KEY_EXPIRATION = datetime.datetime(2099, 12, 31, 23, 59, 59)
@@ -282,6 +285,9 @@ def _test_headscale_connection() -> tuple[bool, str]:
 
 
 def _get_headscale_login_server() -> Optional[str]:
+    login_server = get_ctfd_config(CONFIG_LOGIN_SERVER)
+    if login_server:
+        return login_server.strip().rstrip("/")
     api_url = get_ctfd_config(CONFIG_API_URL)
     if not api_url:
         return None
@@ -515,7 +521,9 @@ def load(app):
     @admins_only
     def admin_settings():
         formdata = request.form if request.method == "POST" else None
-        settings_form = HeadscaleSettingsForm(formdata=formdata)
+        api_form = ApiConnectionForm(formdata=formdata)
+        contestant_form = ContestantSettingsForm(formdata=formdata)
+        acl_form = AclTaggingForm(formdata=formdata)
         enforcement_form = EnforcementSettingsForm(formdata=formdata)
 
         nonce_valid = True
@@ -528,33 +536,63 @@ def load(app):
                     "error",
                 )
 
+        has_token = bool(get_ctfd_config(CONFIG_API_TOKEN))
+
+        # Handle API Connection save
         if (
             nonce_valid
-            and settings_form.save.data
-            and settings_form.validate_on_submit()
+            and api_form.save_api.data
+            and api_form.validate_on_submit()
         ):
-            # Save settings
-            set_ctfd_config(CONFIG_API_URL, settings_form.api_url.data.strip())
-            set_ctfd_config(CONFIG_API_TOKEN, settings_form.api_token.data.strip())
+            new_token = (api_form.api_token.data or "").strip()
+            if not new_token and not has_token:
+                flash("API token is required.", "error")
+                return redirect(url_for("tailscale_admin.admin_settings"))
+
+            set_ctfd_config(CONFIG_API_URL, api_form.api_url.data.strip())
+            if new_token:
+                set_ctfd_config(CONFIG_API_TOKEN, new_token)
             set_ctfd_config(
-                CONFIG_VERIFY_TLS, "true" if settings_form.verify_tls.data else "false"
+                CONFIG_VERIFY_TLS, "true" if api_form.verify_tls.data else "false"
+            )
+            flash("API connection settings saved.", "success")
+            return redirect(url_for("tailscale_admin.admin_settings"))
+
+        # Handle Contestant Settings save
+        if (
+            nonce_valid
+            and contestant_form.save_contestant.data
+            and contestant_form.validate_on_submit()
+        ):
+            set_ctfd_config(
+                CONFIG_LOGIN_SERVER,
+                (contestant_form.login_server.data or "").strip(),
             )
             set_ctfd_config(
                 CONFIG_SHOW_USER_KEYS,
-                "true" if settings_form.show_user_keys.data else "false",
+                "true" if contestant_form.show_user_keys.data else "false",
             )
-            set_ctfd_config(
-                CONFIG_TAG_STRATEGY, settings_form.tag_strategy.data or "auto"
-            )
-            lb_groups = settings_form.lb_groups.data or 0
-            set_ctfd_config(CONFIG_LB_GROUPS, str(lb_groups))
-
-            flash("Headscale settings saved successfully.", "success")
+            flash("Contestant settings saved.", "success")
             return redirect(url_for("tailscale_admin.admin_settings"))
 
+        # Handle ACL & Tagging save
         if (
             nonce_valid
-            and enforcement_form.update.data
+            and acl_form.save_acl.data
+            and acl_form.validate_on_submit()
+        ):
+            set_ctfd_config(
+                CONFIG_TAG_STRATEGY, acl_form.tag_strategy.data or "auto"
+            )
+            lb_groups = acl_form.lb_groups.data or 0
+            set_ctfd_config(CONFIG_LB_GROUPS, str(lb_groups))
+            flash("ACL & tagging settings saved.", "success")
+            return redirect(url_for("tailscale_admin.admin_settings"))
+
+        # Handle Enforcement save
+        if (
+            nonce_valid
+            and enforcement_form.save_enforcement.data
             and enforcement_form.validate_on_submit()
         ):
             set_ctfd_config(
@@ -563,20 +601,27 @@ def load(app):
             )
             allowed_cidrs = enforcement_form.allowed_cidrs.data or ""
             _set_list_config(CONFIG_ALLOWED_CIDRS, allowed_cidrs.split(","))
-            flash("Enforcement policy updated.", "success")
+            flash("Enforcement policy saved.", "success")
             return redirect(url_for("tailscale_admin.admin_settings"))
 
-        if not settings_form.is_submitted():
-            settings_form.api_url.data = get_ctfd_config(CONFIG_API_URL) or ""
-            settings_form.api_token.data = get_ctfd_config(CONFIG_API_TOKEN) or ""
-            settings_form.verify_tls.data = _get_bool_config(CONFIG_VERIFY_TLS, True)
-            settings_form.show_user_keys.data = _get_bool_config(
+        # Populate forms with current values on GET
+        if not api_form.is_submitted():
+            api_form.api_url.data = get_ctfd_config(CONFIG_API_URL) or ""
+            api_form.verify_tls.data = _get_bool_config(CONFIG_VERIFY_TLS, True)
+
+        if not contestant_form.is_submitted():
+            contestant_form.login_server.data = (
+                get_ctfd_config(CONFIG_LOGIN_SERVER) or ""
+            )
+            contestant_form.show_user_keys.data = _get_bool_config(
                 CONFIG_SHOW_USER_KEYS, False
             )
-            settings_form.tag_strategy.data = (
+
+        if not acl_form.is_submitted():
+            acl_form.tag_strategy.data = (
                 get_ctfd_config(CONFIG_TAG_STRATEGY) or "auto"
             )
-            settings_form.lb_groups.data = _get_lb_groups_count()
+            acl_form.lb_groups.data = _get_lb_groups_count()
 
         if not enforcement_form.is_submitted():
             enforcement_form.enforce_connection.data = _get_bool_config(
@@ -587,8 +632,11 @@ def load(app):
 
         return render_template(
             "tailscale/admin_settings.html",
-            settings_form=settings_form,
+            api_form=api_form,
+            contestant_form=contestant_form,
+            acl_form=acl_form,
             enforcement_form=enforcement_form,
+            has_token=has_token,
             nonce=generate_nonce(),
         )
 

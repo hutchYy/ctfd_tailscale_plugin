@@ -1,4 +1,4 @@
-from wtforms import BooleanField, Form, HiddenField, IntegerField, SelectField, StringField, SubmitField, TextAreaField
+from wtforms import BooleanField, Form, HiddenField, IntegerField, PasswordField, SelectField, StringField, SubmitField, TextAreaField
 from wtforms.validators import DataRequired, NumberRange, Optional, URL
 
 
@@ -17,16 +17,16 @@ class BaseForm(Form):
         return self.is_submitted() and self.validate()
 
 
-class HeadscaleSettingsForm(BaseForm):
+class ApiConnectionForm(BaseForm):
     api_url = StringField(
         "Headscale API URL",
         validators=[DataRequired(message="API URL is required"), URL(require_tld=False, message="Enter a valid URL")],
-        description="Base URL to your Headscale server (e.g., https://headscale.example.com). "
-                    "This is the endpoint where the plugin will make API calls to manage users and generate pre-auth keys.",
+        description="Internal URL the plugin uses to reach the Headscale API (e.g., http://headscale:8080). "
+                    "This can be an internal hostname or IP. Contestants never see this address.",
     )
-    api_token = StringField(
+    api_token = PasswordField(
         "Headscale API Token",
-        validators=[DataRequired(message="API token is required")],
+        validators=[Optional()],
         description="Bearer token for authenticating with the Headscale API. "
                     "Generate this token using 'headscale apikeys create' on your Headscale server. "
                     "Keep this token secure as it grants full access to your Headscale instance.",
@@ -38,6 +38,18 @@ class HeadscaleSettingsForm(BaseForm):
                     "Only disable this for development/testing with self-signed certificates. "
                     "WARNING: Disabling in production exposes you to man-in-the-middle attacks.",
     )
+    save_api = SubmitField("Save")
+
+
+class ContestantSettingsForm(BaseForm):
+    login_server = StringField(
+        "Public Login Server URL",
+        validators=[Optional(), URL(require_tld=False, message="Enter a valid URL")],
+        description="Public URL contestants use in their tailscale login --login-server command. "
+                    "Set this when your Headscale API URL is internal (e.g., http://headscale:1200) "
+                    "and contestants need a different, publicly reachable address. "
+                    "Leave empty to use the Headscale API URL as the login server.",
+    )
     show_user_keys = BooleanField(
         "Expose pre-auth keys to contestants",
         default=False,
@@ -45,6 +57,10 @@ class HeadscaleSettingsForm(BaseForm):
                     "Keep this OFF until you're ready to distribute keys (e.g., at competition start). "
                     "When enabled, users can view their keys at /tailscale/key to connect to your network.",
     )
+    save_contestant = SubmitField("Save")
+
+
+class AclTaggingForm(BaseForm):
     tag_strategy = SelectField(
         "ACL Tag Strategy",
         choices=[
@@ -66,7 +82,7 @@ class HeadscaleSettingsForm(BaseForm):
                     "Users get assigned tags like 'lb-group-1', 'lb-group-2', etc. based on their user ID. "
                     "Use this to evenly split traffic across multiple infrastructure nodes or regions.",
     )
-    save = SubmitField("Save settings")
+    save_acl = SubmitField("Save")
 
 
 class EnforcementSettingsForm(BaseForm):
@@ -80,7 +96,7 @@ class EnforcementSettingsForm(BaseForm):
         description="Comma-separated list of CIDR blocks permitted to access challenges (defaults to Tailscale CGNAT range)",
         render_kw={"rows": 3},
     )
-    update = SubmitField("Update enforcement policy")
+    save_enforcement = SubmitField("Save")
 
 
 class RegenerateKeyForm(BaseForm):
